@@ -575,9 +575,10 @@ dtutils_string.libdoc.functions["build_substitution_list"] = {
   Name = [[build_substitution_list]],
   Synopsis = [[build a list of variable substitutions]],
   Usage = [[local ds = require "lib/dtutils.string"
-    ds.build_substitution_list(image, sequence, [username], [pic_folder], [home], [desktop])
+    ds.build_substitution_list(image, sequence, variable_string, [username], [pic_folder], [home], [desktop])
       image - dt_lua_image_t - the image being processed
       sequence - integer - the sequence number of the image
+      variable_string - string - the substitution variable string
       [username] - string - optional - user name.  Will be determined if not supplied
       [pic_folder] - string - optional - pictures folder name.  Will be determined if not supplied
       [home] - string - optional - home directory.  Will be determined if not supplied
@@ -594,7 +595,18 @@ dtutils_string.libdoc.functions["build_substitution_list"] = {
   Copyright = [[]],
 }
 
-function dtutils_string.build_substition_list(image, sequence, username, pic_folder, home, desktop)
+local function build_category_substitution_list(image, variable_string)
+  -- scan the variable string for CATEGORYn(tag name) entries and build the substitutions
+  local old_log_level = log.log_level()
+  log.log_level(dtutils_string.log_level)
+  -- scan the variable string looking for CATEGORYn 
+  -- retrieve the tag and compute the replacement string
+  -- add the found string as a PLACEHOLDER
+  -- add the replacement to the corresponding spot in the replacement table
+  log.log_level(old_log_level)
+end
+
+function dtutils_string.build_substition_list(image, sequence, variable_string, username, pic_folder, home, desktop)
   -- build the argument substitution list from each image
 
   local old_log_level = log.log_level()
@@ -681,7 +693,6 @@ function dtutils_string.build_substition_list(image, sequence, username, pic_fol
                         image.publisher,                       -- PUBLISHER
                         image.rights,                          -- RIGHTS
                         "",                                    -- TAGS
-                        "",                                    -- CATEGORYn
                         "",                                    -- SIDECAR.TXT
                         pictures_folder,                       -- FOLDER.PICTURES
                         home_folder,                           -- FOLDER.HOME
@@ -719,79 +730,92 @@ local function treat(var_string)
   var = check_legacy_vars(var)
   log.msg(log.info, "var_string is " .. tostring(var_string) .. " and var is " .. tostring(var))
   ret_val = substitutes[var]
-  if not ret_val then
+
+  local valid_var = false 
+
+  if ret_val then
+    valid_var = true 
+  elseif string.match(var, "CATEGORY%d") then 
+    valid_var = true 
+  end
+
+  if not valid_var then
     log.msg(log.error, "variable " .. var .. " is not an allowed variable, returning empty value")
     log.log_level(old_log_level)
     return ""
   end
-  local args = string.gsub(var_string, var, "")
-  log.msg(log.info, "args is " .. tostring(args))
-  if string.len(args) > 0 then
-    if string.match(args, '^%^%^') then
-      ret_val = string.upper(ret_val)
-    elseif string.match(args, "^%^") then
-      ret_val = string.gsub(ret_val, "^%a", string.upper, 1)
-    elseif string.match(args, "^,,") then
-      ret_val = string.lower(ret_val)
-    elseif string.match(args, "^,") then
-      ret_val = string.gsub(ret_val, "^%a", string.lower, 1)
-    elseif string.match(args, "^:%-?%d+:%-?%d+") then
-      local soffset, slen = string.match(args, ":(%-?%d+):(%-?%d+)")
-      log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
-      if tonumber(soffset) >= 0 then
-        soffset = soffset + 1
+  if string.match(var, "CATEGORY%d") then 
+    -- process category
+  else
+    local args = string.gsub(var_string, var, "")
+    log.msg(log.info, "args is " .. tostring(args))
+    if string.len(args) > 0 then
+      if string.match(args, '^%^%^') then
+        ret_val = string.upper(ret_val)
+      elseif string.match(args, "^%^") then
+        ret_val = string.gsub(ret_val, "^%a", string.upper, 1)
+      elseif string.match(args, "^,,") then
+        ret_val = string.lower(ret_val)
+      elseif string.match(args, "^,") then
+        ret_val = string.gsub(ret_val, "^%a", string.lower, 1)
+      elseif string.match(args, "^:%-?%d+:%-?%d+") then
+        local soffset, slen = string.match(args, ":(%-?%d+):(%-?%d+)")
+        log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
+        if tonumber(soffset) >= 0 then
+          soffset = soffset + 1
+        end
+        log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
+        if tonumber(soffset) < 0 and tonumber(slen) < 0 then
+          local temp = soffset
+          soffset = slen 
+          slen = temp 
+        end
+        log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
+        ret_val = string.sub(ret_val, soffset, slen)
+        log.msg(log.info, "ret_val is " .. ret_val)
+      elseif string.match(args, "^:%-?%d+") then
+        local soffset= string.match(args, ":(%-?%d+)")
+        if tonumber(soffset) >= 0 then
+          soffset = soffset + 1
+        end
+        ret_val = string.sub(ret_val, soffset, -1)
+      elseif string.match(args, "^-%$%(.-%)") then
+        local replacement = string.match(args, "-%$%(([%a%._]+)%)")
+        replacement = check_legacy_vars(replacement)
+        if string.len(ret_val) == 0 then
+          ret_val = substitutes[replacement]
+        end
+      elseif string.match(args, "^-.+$") then
+        local replacement = string.match(args, "-(.+)$")
+        if string.len(ret_val) == 0 then
+          ret_val = replacement
+        end
+      elseif string.match(args, "^+.+") then
+        local replacement = string.match(args, "+(.+)")
+        if string.len(ret_val) > 0 then
+          ret_val = replacement
+        end
+      elseif string.match(args, "^#.+") then
+        local pattern = string.match(args, "#(.+)")
+        log.msg(log.info, "pattern to remove is " .. tostring(pattern))
+        ret_val = string.gsub(ret_val, "^" .. dtutils_string.sanitize_lua(pattern), "")
+      elseif string.match(args, "^%%.+") then
+        local pattern = string.match(args, "%%(.+)")
+        ret_val = string.gsub(ret_val, pattern .. "$", "")
+      elseif string.match(args, "^//.-/.+") then
+        local pattern, replacement = string.match(args, "//(.-)/(.+)")
+        ret_val = string.gsub(ret_val, pattern, replacement)
+       elseif string.match(args, "^/#.+/.+") then
+        local pattern, replacement = string.match(args, "/#(.+)/(.+)")
+        ret_val = string.gsub(ret_val, "^" .. pattern, replacement, 1)
+      elseif string.match(args, "^/%%.-/.+") then
+        local pattern, replacement = string.match(args, "/%%(.-)/(.+)")
+        ret_val = string.gsub(ret_val, pattern .. "$", replacement)
+     elseif string.match(args, "^/.-/.+") then
+        log.msg(log.info, "took replacement branch")
+        local pattern, replacement = string.match(args, "/(.-)/(.+)")
+        ret_val = string.gsub(ret_val, pattern, replacement, 1)
       end
-      log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
-      if tonumber(soffset) < 0 and tonumber(slen) < 0 then
-        local temp = soffset
-        soffset = slen 
-        slen = temp 
-      end
-      log.msg(log.info, "soffset is " .. soffset .. " and slen is " .. slen)
-      ret_val = string.sub(ret_val, soffset, slen)
-      log.msg(log.info, "ret_val is " .. ret_val)
-    elseif string.match(args, "^:%-?%d+") then
-      local soffset= string.match(args, ":(%-?%d+)")
-      if tonumber(soffset) >= 0 then
-        soffset = soffset + 1
-      end
-      ret_val = string.sub(ret_val, soffset, -1)
-    elseif string.match(args, "^-%$%(.-%)") then
-      local replacement = string.match(args, "-%$%(([%a%._]+)%)")
-      replacement = check_legacy_vars(replacement)
-      if string.len(ret_val) == 0 then
-        ret_val = substitutes[replacement]
-      end
-    elseif string.match(args, "^-.+$") then
-      local replacement = string.match(args, "-(.+)$")
-      if string.len(ret_val) == 0 then
-        ret_val = replacement
-      end
-    elseif string.match(args, "^+.+") then
-      local replacement = string.match(args, "+(.+)")
-      if string.len(ret_val) > 0 then
-        ret_val = replacement
-      end
-    elseif string.match(args, "^#.+") then
-      local pattern = string.match(args, "#(.+)")
-      log.msg(log.info, "pattern to remove is " .. tostring(pattern))
-      ret_val = string.gsub(ret_val, "^" .. dtutils_string.sanitize_lua(pattern), "")
-    elseif string.match(args, "^%%.+") then
-      local pattern = string.match(args, "%%(.+)")
-      ret_val = string.gsub(ret_val, pattern .. "$", "")
-    elseif string.match(args, "^//.-/.+") then
-      local pattern, replacement = string.match(args, "//(.-)/(.+)")
-      ret_val = string.gsub(ret_val, pattern, replacement)
-     elseif string.match(args, "^/#.+/.+") then
-      local pattern, replacement = string.match(args, "/#(.+)/(.+)")
-      ret_val = string.gsub(ret_val, "^" .. pattern, replacement, 1)
-    elseif string.match(args, "^/%%.-/.+") then
-      local pattern, replacement = string.match(args, "/%%(.-)/(.+)")
-      ret_val = string.gsub(ret_val, pattern .. "$", replacement)
-   elseif string.match(args, "^/.-/.+") then
-      log.msg(log.info, "took replacement branch")
-      local pattern, replacement = string.match(args, "/(.-)/(.+)")
-      ret_val = string.gsub(ret_val, pattern, replacement, 1)
     end
   end
   log.log_level(old_log_level)
@@ -845,6 +869,14 @@ dtutils_string.libdoc.functions["clear_substitute_list"] = {
   Copyright = [[]],
 }
 
+local function clear_category_substitute_list()
+  -- remove the CATEGORY placeholders and substitutues
+  local old_log_level = log.log_level()
+  log.log_level(dtutils_string.log_level)
+  -- start at end of PLACEHOLDERS array and work backwords deleting category and replacement
+  log.log_level(old_log_level)
+end
+
 function dtutils_string.clear_substitute_list()
   local old_log_level = log.log_level()
   log.log_level(dtutils_string.log_level)
@@ -858,9 +890,10 @@ dtutils_string.libdoc.functions["substitute"] = {
   Name = [[substitute]],
   Synopsis = [[Check if a string has been sanitized]],
   Usage = [[local ds = require "lib/dtutils.string"
-    ds.substitute(image, sequence, [username], [pic_folder], [home], [desktop])
+    ds.substitute(image, sequence, variable_string, [username], [pic_folder], [home], [desktop])
       image - dt_lua_image_t - the image being processed
       sequence - integer - the sequence number of the image
+      variable_string - string - the substitution variable string
       [username] - string - optional - user name.  Will be determined if not supplied
       [pic_folder] - string - optional - pictures folder name.  Will be determined if not supplied
       [home] - string - optional - home directory.  Will be determined if not supplied
@@ -881,7 +914,7 @@ function dtutils_string.substitute(image, sequence, variable_string, username, p
   local old_log_level = log.log_level()
   log.log_level(dtutils_string.log_level)
   dtutils_string.clear_substitute_list()
-  dtutils_string.build_substition_list(image, sequence, username, pic_folder, home, desktop)  
+  dtutils_string.build_substition_list(image, sequence, variable_string, username, pic_folder, home, desktop)  
   local str = dtutils_string.substitute_list(variable_string)
   log.log_level(old_log_level)
   return str
