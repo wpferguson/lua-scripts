@@ -4,7 +4,7 @@ local dt = require "darktable"
 local du = require "lib/dtutils"
 local log = require "lib/dtutils.log"
 
-local DEFAULT_LOG_LEVEL = log.error
+local DEFAULT_LOG_LEVEL = log.info
 
 dtutils_string.log_level = DEFAULT_LOG_LEVEL
 
@@ -477,6 +477,7 @@ function dtutils_string.get_filetype(str)
 end
 
 local substitutes = {}
+local category_substitutes = {}
 
 -- - - - - - - - - - - - - - - - - - - - - - - -
 -- C O N S T A N T S
@@ -488,7 +489,7 @@ local PLACEHOLDERS = {"ROLL.NAME",
                       "FILE.EXTENSION", 
                       "ID", 
                       "VERSION", 
-                      "VERSION.IF.MULTI",    -- Not Implemented
+                      "VERSION.IF.MULTI",
                       "VERSION.NAME",
                       "DARKTABLE.VERSION",
                       "DARKTABLE.NAME",      -- Not Implemented
@@ -504,14 +505,20 @@ local PLACEHOLDERS = {"ROLL.NAME",
                       "WIDTH.MAX",           -- Not Implemented
                       "HEIGHT.MAX",          -- Not Implemented
                       "YEAR", 
+                      "YEAR.SHORT",
                       "MONTH", 
+                      "MONTH.LONG",
+                      "MONTH.SHORT",
                       "DAY", 
                       "HOUR", 
                       "MINUTE", 
                       "SECOND", 
                       "MSEC",
                       "EXIF.YEAR", 
+                      "EXIF.YEAR.SHORT",
                       "EXIF.MONTH", 
+                      "EXIF.MONTH.LONG",
+                      "EXIF.MONTH.SHORT",
                       "EXIF.DAY",
                       "EXIF.HOUR", 
                       "EXIF.MINUTE", 
@@ -523,17 +530,22 @@ local PLACEHOLDERS = {"ROLL.NAME",
                       "EXIF.EXPOSURE",
                       "EXIF.EXPOSURE.BIAS",
                       "EXIF.APERTURE",
+                      "EXIF.CROP.FACTOR",
                       "EXIF.FOCAL.LENGTH",
+                      "EXIF.FOCAL.LENGTH.EQUIV",  -- Not Implemented
                       "EXIF.FOCUS.DISTANCE",
+                      "IMAGE.EXIF",          -- Not Implemented
                       "LONGITUDE",
                       "LATITUDE",
-                      "ALTITUDE",
+                      "ELEVATION",
+                      "GPS.LOCATION",        -- Not Implemented
                       "STARS", 
                       "RATING.ICONS",        -- Not Implemented
                       "LABELS",
                       "LABELS.ICONS",        -- Not Implemented 
                       "MAKER", 
                       "MODEL", 
+                      "LENS",
                       "TITLE",
                       "DESCRIPTION",
                       "CREATOR", 
@@ -547,7 +559,7 @@ local PLACEHOLDERS = {"ROLL.NAME",
                       "FOLDER.DESKTOP",
                       "OPENCL.ACTIVATED",    -- Not Implemented
                       "USERNAME",
-                      "NL",
+                      "NL",                  -- Not Implemented
                       "JOBCODE"              -- Not Implemented
 }
 
@@ -560,14 +572,19 @@ local DESKTOP = HOME .. PS .. "Desktop"
 local function get_colorlabels(image)
   local old_log_level = log.log_level()
   log.log_level(dtutils_string.log_level)
+
   local colorlabels = {}
+
   if image.red then table.insert(colorlabels, "red") end
   if image.yellow then table.insert(colorlabels, "yellow") end
   if image.green then table.insert(colorlabels, "green") end
   if image.blue then table.insert(colorlabels, "blue") end
   if image.purple then table.insert(colorlabels, "purple") end
-  local labels = #colorlabels == 1 and colorlabels[1] or du.join(colorlabels, ",")
+
+  local labels = #colorlabels == 1 and colorlabels[1] or du.join(colorlabels, "_")
+
   log.log_level(old_log_level)
+
   return labels 
 end
 
@@ -598,12 +615,40 @@ dtutils_string.libdoc.functions["build_substitution_list"] = {
 local function build_category_substitution_list(image, variable_string)
   -- scan the variable string for CATEGORYn(tag name) entries and build the substitutions
   local old_log_level = log.log_level()
-  log.log_level(dtutils_string.log_level)
+  -- log.log_level(dtutils_string.log_level)
+  --log.log_level(log.debug)
+
+  for match in string.gmatch(variable_string, "%$%(.-%)?%)") do
+    log.msg(log.info, "match is " .. match)
+    local var = string.match(match, "%$%((.-%)?)%)")
+    log.msg(log.info, "var is " .. var)
+    if string.match(var, "CATEGORY%d") then
+      local element, tag = string.match(var, "CATEGORY(%d)%((.-)%)")
+      element = element + 1
+      log.msg(log.debug, "element is " .. element .. " and tag is " .. tag)
+      local tags = image:get_tags()
+      log.msg(log.debug, "got " .. #tags .. " from image " .. image.filename)
+      for _, image_tag in ipairs(tags) do
+        log.msg(log.debug, "checking tag " .. image_tag.name)
+        if string.match(image_tag.name, tag) then
+          parts = du.split(image_tag.name, "|")
+          substitutes[var] = parts[element]
+          log.msg(log.info, "set substitute for " .. var .. " to " .. parts[element])
+          log.msg(log.info, "double check substitutes[" .. var .. "] is " .. substitutes[var])
+        end
+      end
+    end
+  end
   -- scan the variable string looking for CATEGORYn 
   -- retrieve the tag and compute the replacement string
   -- add the found string as a PLACEHOLDER
   -- add the replacement to the corresponding spot in the replacement table
   log.log_level(old_log_level)
+end
+
+local function exiftime2systime(exiftime)
+  local yr,mo,dy,h,m,s = string.match(exiftime, "(%d-):(%d-):(%d-) (%d-):(%d-):(%d+)")
+  return(os.time{year=yr, month=mo, day=dy, hour=h, min=m, sec=s})
 end
 
 function dtutils_string.build_substition_list(image, sequence, variable_string, username, pic_folder, home, desktop)
@@ -618,6 +663,8 @@ function dtutils_string.build_substition_list(image, sequence, variable_string, 
   end
 
   local datetime = os.date("*t")
+  local long_month = os.date("%B")
+  local short_month = os.date("%b")
   local user_name = username or USER
   local pictures_folder = pic_folder or PICTURES
   local home_folder = home or HOME
@@ -641,7 +688,8 @@ function dtutils_string.build_substition_list(image, sequence, variable_string, 
                         dtutils_string.get_filetype(image.filename),-- FILE.EXTENSION
                         image.id,                              -- ID
                         image.duplicate_index,                 -- VERSION
-                        "",                                    -- VERSION.IF_MULTI
+ --                        #image:get_group_members() > 1 and image.duplicate_index or "", -- VERSION.IF_MULTI
+                        "", -- VERSION.IF_MULTI
                         image.version_name,                    -- VERSION.NAME
                         dt.configuration.version,              -- DARKTABLE.VERSION
                         "",                                    -- DARKTABLE.NAME
@@ -657,56 +705,71 @@ function dtutils_string.build_substition_list(image, sequence, variable_string, 
                         "",                                    -- WIDTH.MAX
                         "",                                    -- HEIGHT.MAX
                         string.format("%4d", datetime.year),   -- YEAR
+                        string.sub(datetime.year, 3),          -- YEAR.SHORT
                         string.format("%02d", datetime.month), -- MONTH
+                        long_month,                            -- MONTH.LONG
+                        short_month,                           -- MONTH.SHORT
                         string.format("%02d", datetime.day),   -- DAY
                         string.format("%02d", datetime.hour),  -- HOUR
                         string.format("%02d", datetime.min),   -- MINUTE
                         string.format("%02d", datetime.sec),   -- SECOND
-                        "",                                    -- MSEC
+                        0,                                     -- MSEC
                         eyear,                                 -- EXIF.YEAR
+                        string.sub(eyear, 3),                  -- EXIF.YEAR.SHORT
                         emon,                                  -- EXIF.MONTH
+                        os.date("%B", exiftime2systime(image.exif_datetime_taken)),           -- EXIF.MONTH.LONG
+                        os.date("%b", exiftime2systime(image.exif_datetime_taken)),          -- EXIF.MONTH.SHORT
                         eday,                                  -- EXIF.DAY
                         ehour,                                 -- EXIF.HOUR
                         emin,                                  -- EXIF.MINUTE
                         esec,                                  -- EXIF.SECOND
                         emsec,                                 -- EXIF.MSEC
-                        "",                                    -- EXIF.DATE.REGIONAL
-                        "",                                    -- EXIF.TIME.REGIONAL
+                        "",                                    -- EXIF.DATE.REGIONAL - wont be implemented
+                        "",                                    -- EXIF.TIME.REGIONAL - wont be implemented
                         string.format("%d", image.exif_iso),   -- EXIF.ISO
-                        string.format("1/%.0f", 1./image.exif_exposure), -- EXIF.EXPOSURE
+                        string.format("%.0f", 1./image.exif_exposure), -- EXIF.EXPOSURE
                         image.exif_exposure_bias,              -- EXIF.EXPOSURE.BIAS
                         string.format("%.01f", image.exif_aperture), -- EXIF.APERTURE
+                        string.format("%.01f", image.exif_crop),-- EXIF.CROP_FACTOR
                         string.format("%.0f", image.exif_focal_length), -- EXIF.FOCAL.LENGTH
+                        string.format("%.0f", image.exif_focal_length * image.exif_crop), -- EXIF.FOCAL.LENGTH.EQUIV
                         image.exif_focus_distance,             -- EXIF.FOCUS.DISTANCE
+                        "",                                    -- IMAGE.EXIF
                         image.longitude or "",                 -- LONGITUDE
                         image.latitude or "",                  -- LATITUDE
-                        image.elevation or "",                 -- ALTITUDE
+                        image.elevation or "",                 -- ELEVATION
+                        "",                                    -- GPS.LOCATION - wont be implemented
                         image.rating,                          -- STARS
-                        "",                                    -- RATING.ICONS
+                        "",                                    -- RATING.ICONS - wont be implemented
                         labels,                                -- LABELS
-                        "",                                    -- LABELS.ICONS
+                        "",                                    -- LABELS.ICONS - wont be implemented
                         image.exif_maker,                      -- MAKER
                         image.exif_model,                      -- MODEL
+                        image.exif_lens,                       -- LENS
                         image.title,                           -- TITLE
                         image.description,                     -- DESCRIPTION
                         image.creator,                         -- CREATOR
                         image.publisher,                       -- PUBLISHER
                         image.rights,                          -- RIGHTS
-                        "",                                    -- TAGS
-                        "",                                    -- SIDECAR.TXT
+                        "",                                    -- TAGS - wont be implemented
+                        "",                                    -- CATEGORY
+                        "",                                    -- SIDECAR.TXT - wont be implemented
                         pictures_folder,                       -- FOLDER.PICTURES
                         home_folder,                           -- FOLDER.HOME
                         desktop_folder,                        -- FOLDER.DESKTOP
-                        "",                                    -- OPENCL.ACTIVATED
+                        "",                                    -- OPENCL.ACTIVATED - wont be implemented
                         user_name,                             -- USERNAME
-                        "\n",                                  -- NL
-                        ""                                     -- JOBCODE
+                        "",                                    -- NL - wont be implemented
+                        ""                                     -- JOBCODE - wont be implemented
   }
 
   for i = 1, #PLACEHOLDERS, 1 do 
     substitutes[PLACEHOLDERS[i]] = replacements[i] 
     log.msg(log.info, "setting " .. PLACEHOLDERS[i] .. " to " .. tostring(replacements[i]))
   end
+
+  build_category_substitution_list(image, variable_string)
+
   log.log_level(old_log_level)
 end
 
@@ -723,20 +786,26 @@ end
 
 local function treat(var_string)
   local old_log_level = log.log_level()
-  log.log_level(dtutils_string.log_level)
+  --log.log_level(dtutils_string.log_level)
+  --log.log_level(log.info)
   local ret_val = ""
   -- remove the var from the string
   local var = string.match(var_string, "[%a%._]+")
   var = check_legacy_vars(var)
   log.msg(log.info, "var_string is " .. tostring(var_string) .. " and var is " .. tostring(var))
-  ret_val = substitutes[var]
-
+  if string.match(var_string, "CATEGORY%d") then
+    log.msg(log.info, "substituting for " .. var_string)
+    ret_val = substitutes[var_string]
+    log.msg(log.info, "ret_val is " .. ret_val)
+  else
+    ret_val = substitutes[var]
+  end
   local valid_var = false 
 
   if ret_val then
     valid_var = true 
-  elseif string.match(var, "CATEGORY%d") then 
-    valid_var = true 
+  --elseif string.match(var, "CATEGORY%d") then 
+    --valid_var = true 
   end
 
   if not valid_var then
@@ -745,7 +814,7 @@ local function treat(var_string)
     return ""
   end
   if string.match(var, "CATEGORY%d") then 
-    -- process category
+    ret_val = process_category(image, var, var_string)
   else
     local args = string.gsub(var_string, var, "")
     log.msg(log.info, "args is " .. tostring(args))
@@ -811,7 +880,7 @@ local function treat(var_string)
       elseif string.match(args, "^/%%.-/.+") then
         local pattern, replacement = string.match(args, "/%%(.-)/(.+)")
         ret_val = string.gsub(ret_val, pattern .. "$", replacement)
-     elseif string.match(args, "^/.-/.+") then
+      elseif string.match(args, "^/.-/.+") then
         log.msg(log.info, "took replacement branch")
         local pattern, replacement = string.match(args, "/(.-)/(.+)")
         ret_val = string.gsub(ret_val, pattern, replacement, 1)
@@ -869,20 +938,13 @@ dtutils_string.libdoc.functions["clear_substitute_list"] = {
   Copyright = [[]],
 }
 
-local function clear_category_substitute_list()
-  -- remove the CATEGORY placeholders and substitutues
-  local old_log_level = log.log_level()
-  log.log_level(dtutils_string.log_level)
-  -- start at end of PLACEHOLDERS array and work backwords deleting category and replacement
-  log.log_level(old_log_level)
-end
-
 function dtutils_string.clear_substitute_list()
   local old_log_level = log.log_level()
   log.log_level(dtutils_string.log_level)
-  for i = 1, #PLACEHOLDERS, 1 do 
-    substitutes[PLACEHOLDERS[i]] = nil 
-  end
+
+  substitutes = {}
+  category_substitutes = {}
+
   log.log_level(old_log_level)
 end
 
@@ -913,10 +975,15 @@ dtutils_string.libdoc.functions["substitute"] = {
 function dtutils_string.substitute(image, sequence, variable_string, username, pic_folder, home, desktop)
   local old_log_level = log.log_level()
   log.log_level(dtutils_string.log_level)
+
   dtutils_string.clear_substitute_list()
+
   dtutils_string.build_substition_list(image, sequence, variable_string, username, pic_folder, home, desktop)  
+
   local str = dtutils_string.substitute_list(variable_string)
+
   log.log_level(old_log_level)
+
   return str
 end
 
